@@ -1,0 +1,5 @@
+# The build copies nothing from the context, so keep it small.
+.git
+.github
+*.md
+LICENSE
