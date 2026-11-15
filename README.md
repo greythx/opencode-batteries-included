@@ -110,6 +110,7 @@ There are no lockfiles, dependency PRs or bot commits per release. OpenCode vers
 - Runs as root, because upstream does. I'd rather match the official image than win a security argument.
 - Every capability is dropped above. Nothing in the image needs one; add them back only if a tool you install asks for it.
 - Version tags are mutable: a Dockerfile change rebuilds the current OpenCode version under the same tag.
+- Retention: the current release line and the previous line are kept; untagged build artifacts are pruned after verification. If reproducibility matters, pin by digest - the tags move.
 - About 1.5 GB uncompressed. The compiler, two runtimes and the GNU userland are most of it.
 - `apk` is there for a plain `docker run`. With a read-only root an agent cannot add packages, so put them in the Dockerfile, or reach for `uvx` and `npx`.
 - The image carries `/root/.config/gitconfig` and `/root/.config/npmrc` as empty files: `git config --global` dies with a fatal error on a missing file, not with a warning.
