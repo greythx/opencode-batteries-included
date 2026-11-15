@@ -15,9 +15,9 @@ Upstream is Alpine with the `opencode` binary, ripgrep and BusyBox. That covers 
 | `build-base`, `cmake`, `pkgconf` | native addons and source packages |
 | `curl`, `jq`, `unzip`, `ca-certificates`, `openssl` | everyday plumbing |
 
-`nodejs-dev` is Alpine's header package for the Node that is already installed, not a second runtime. It adds `/usr/include/node` and about 1.4 MB. The image sets `npm_config_nodedir=/usr`, so node-gyp compiles against those headers instead of downloading a matching tarball and unpacking it. The download fails on a read-only root with every capability dropped; the system headers do not.
+`nodejs-dev` is Alpine's header package for the Node that is already installed, not a second runtime. It adds `/usr/include/node` and about 1.4 MB. Alpine builds Node with `use_prefix_to_find_headers`, so node-gyp finds those headers on its own and compiles native addons without downloading anything; that works with a read-only root and every capability dropped.
 
-Everything upstream stays as-is: I kept the same base, the same `ENTRYPOINT ["opencode"]`, the same root user and `/root`, and no `CMD`, `WORKDIR` or `HEALTHCHECK`. Two added environment settings: `npm_config_nodedir` for the headers, and `NPM_CONFIG_CACHE=/tmp/npm`, which keeps npm's cache out of the read-only root. Override either with `docker run -e`.
+Everything upstream stays as-is: I kept the same base, the same `ENTRYPOINT ["opencode"]`, the same root user and `/root`, and no `CMD`, `WORKDIR` or `HEALTHCHECK`. The only added environment setting is `NPM_CONFIG_CACHE=/tmp/npm`, which keeps npm's cache out of the read-only root; override it with `docker run -e`.
 
 ## Tags
 
