@@ -36,10 +36,9 @@ RUN apk add --no-cache \
       unzip \
       uv
 
-# nodejs-dev carries the headers and gyp files for the installed Node. Pointing
-# node-gyp at them removes the header download and its tarball unpack, so a
-# native addon builds with a read-only root and without added capabilities.
-ENV npm_config_nodedir=/usr
+# nodejs-dev ships the headers node-gyp needs. Alpine builds Node with
+# use_prefix_to_find_headers and prefix /usr, so node-gyp finds them on its
+# own; native addons build offline with a read-only root and no extra env.
 
 # npm defaults its cache to ~/.npm, which does not work with a read-only root.
 # Default it to the tmpfs path instead; anyone can override it with docker run -e.
