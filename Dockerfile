@@ -41,4 +41,8 @@ RUN apk add --no-cache \
 # native addon builds with a read-only root and without added capabilities.
 ENV npm_config_nodedir=/usr
 
+# npm defaults its cache to ~/.npm, which does not work with a read-only root.
+# Default it to the tmpfs path instead; anyone can override it with docker run -e.
+ENV NPM_CONFIG_CACHE=/tmp/npm
+
 # No HEALTHCHECK: upstream has none, and the check belongs to the deployment.
