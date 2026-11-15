@@ -194,7 +194,7 @@ jobs:
             type=raw,value=latest
 
       - if: needs.resolve.outputs.aliases == 'false'
-        id: meta
+        id: meta-no-alias
         uses: docker/metadata-action@v6
         with:
           images: ${{ needs.resolve.outputs.image }}
@@ -227,6 +227,7 @@ jobs:
             if [ "$(probe http://127.0.0.1:4096/global/health || echo 000)" = "200" ]; then ready=1; break; fi
             sleep 1
           done
+          : "$i"
           if [ "$ready" != "1" ]; then docker logs smoke; exit 1; fi
           test "$(probe http://127.0.0.1:4096/global/health || echo 000)" = 200
           test "$(probe http://127.0.0.1:4096/api/info || echo 000)" = 401
@@ -283,9 +284,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           pull: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          annotations: ${{ steps.meta.outputs.annotations }}
+          tags: ${{ steps.meta.outputs.tags || steps.meta-no-alias.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels || steps.meta-no-alias.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations || steps.meta-no-alias.outputs.annotations }}
           build-args: |
             OPENCODE_VERSION=${{ needs.resolve.outputs.version }}
           cache-from: type=gha
