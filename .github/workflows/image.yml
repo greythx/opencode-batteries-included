@@ -216,7 +216,7 @@ jobs:
       - name: Smoke test
         run: |
           docker run -d --name smoke \
-            --read-only --tmpfs /tmp:rw,exec,size=1g \
+            --read-only --tmpfs /tmp:rw,exec,size=1g --tmpfs /root/.local:rw,mode=0755 \
             --cap-drop ALL --security-opt no-new-privileges --init \
             -e OPENCODE_PASSWORD=smoke-password \
             local/opencode-batteries-included:test \
