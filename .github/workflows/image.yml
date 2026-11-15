@@ -109,7 +109,7 @@ jobs:
           set -euo pipefail
           build="${BUILD}"
 
-          if [ "${build}" = "true" ] && [ "${EVENT}" != "push" ] && [ -z "${INPUT}" ]; then
+          if [ "${build}" = "true" ] && [ "${EVENT}" != "push" ] && [ "${EVENT}" != "pull_request" ] && [ -z "${INPUT}" ]; then
             if docker buildx imagetools inspect "${IMAGE}:${VERSION}" >/dev/null 2>&1; then
               echo "${IMAGE}:${VERSION} already exists"
               build=false
