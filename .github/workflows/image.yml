@@ -15,12 +15,20 @@ on:
   schedule:
     # Every six hours. A new OpenCode release is picked up on the next run.
     - cron: "17 */6 * * *"
+    # First of the month, 05:37 UTC. Forced rebuild so base image patches land
+    # even when upstream publishes nothing.
+    - cron: "37 5 1 * *"
   workflow_dispatch:
     inputs:
       version:
         description: "OpenCode version without the leading v. Empty means newest release."
         required: false
         type: string
+      force:
+        description: "Rebuild and publish even if this version already exists."
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: image
@@ -37,16 +45,17 @@ jobs:
       version: ${{ steps.pick.outputs.version }}
       build: ${{ steps.check.outputs.build }}
       image: ${{ steps.image.outputs.name }}
+      aliases: ${{ steps.pick.outputs.aliases }}
     steps:
       - id: image
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_OUTPUT}"
 
-      # imagetools talks to the registry directly and buildx is already on the
-      # runner, so this job needs no setup step.
       - id: pick
         env:
           INPUT: ${{ inputs.version }}
           EVENT: ${{ github.event_name }}
+          CRON: ${{ github.event.schedule }}
+          FORCE: ${{ inputs.force }}
           TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -57,15 +66,21 @@ jobs:
               echo "invalid version '${INPUT}': expected X.Y.Z, with or without the leading v" >&2
               exit 1
             fi
-          else
-            version=$(curl -fsSL \
+            newest=$(curl -fsSL \
               -H "Authorization: Bearer ${TOKEN}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/anomalyco/opencode/releases?per_page=100" \
               | jq -r '.[] | select(.prerelease == false) | .tag_name' \
-              | sed 's/^v//' \
-              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-              | sort -V | tail -n1)
+              | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+          else
+            version=""
+            newest=$(curl -fsSL \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/anomalyco/opencode/releases?per_page=100" \
+              | jq -r '.[] | select(.prerelease == false) | .tag_name' \
+              | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+            version="${newest}"
           fi
 
           if [ -z "${version}" ]; then
@@ -74,9 +89,8 @@ jobs:
           fi
           echo "upstream: ${version}"
 
-          # Upstream publishes the image shortly after the release. On the
-          # schedule, wait for the next run; a manual run fails instead of
-          # reporting success for a build that never happened.
+          # On a scheduled run nobody is looking; if the matching image does not
+          # exist upstream yet, wait for the next run rather than burn a red CI.
           if ! docker buildx imagetools inspect "ghcr.io/anomalyco/opencode:${version}" >/dev/null 2>&1; then
             if [ "${EVENT}" = "workflow_dispatch" ]; then
               echo "ghcr.io/anomalyco/opencode:${version} does not exist upstream" >&2
@@ -84,15 +98,28 @@ jobs:
             fi
             echo "ghcr.io/anomalyco/opencode:${version} does not exist yet; retrying on the next run"
             echo "build=false" >> "${GITHUB_OUTPUT}"
+            echo "aliases=true" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "build=true" >> "${GITHUB_OUTPUT}"
 
+          # Alias tags: always publish patch/minor/major for requested builds,
+          # never when HEAD requested is older than the newest upstream release.
+          aliases=true
+          if [ "${EVENT}" = "workflow_dispatch" ] && [ -n "${INPUT}" ]; then
+            if [ "${version}" != "${newest}" ] && [ "$(printf '%s\n%s\n' "${version}" "${newest}" | sort -V | tail -n1)" = "${newest}" ]; then
+              aliases=false
+              echo "alias tags will not move: ${version} is older than upstream ${newest}"
+            fi
+          fi
+          echo "aliases=${aliases}" >> "${GITHUB_OUTPUT}"
+
       # Log in only after the upstream check: a token scoped to this repository
-      # cannot pull another namespace's package.
-      - uses: docker/login-action@v4
+      # cannot pull another namespace's package. Skipped on PRs.
+      - if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -103,13 +130,20 @@ jobs:
           BUILD: ${{ steps.pick.outputs.build }}
           EVENT: ${{ github.event_name }}
           INPUT: ${{ inputs.version }}
+          FORCE: ${{ inputs.force }}
+          CRON: ${{ github.event.schedule }}
           IMAGE: ${{ steps.image.outputs.name }}
           VERSION: ${{ steps.pick.outputs.version }}
         run: |
           set -euo pipefail
           build="${BUILD}"
 
-          if [ "${build}" = "true" ] && [ "${EVENT}" != "push" ] && [ "${EVENT}" != "pull_request" ] && [ -z "${INPUT}" ]; then
+          monthly=false
+          if [ "${EVENT}" = "schedule" ] && [ "${CRON}" = "37 5 1 * *" ]; then monthly=true; fi
+
+          if [ "${FORCE}" = "true" ] || [ "${monthly}" = "true" ]; then
+            echo "forced rebuild requested"
+          elif [ "${build}" = "true" ] && [ "${EVENT}" != "push" ] && [ "${EVENT}" != "pull_request" ] && [ -z "${INPUT}" ]; then
             if docker buildx imagetools inspect "${IMAGE}:${VERSION}" >/dev/null 2>&1; then
               echo "${IMAGE}:${VERSION} already exists"
               build=false
@@ -146,7 +180,9 @@ jobs:
         with:
           platforms: arm64
 
-      - if: github.event_name != 'pull_request'
+      # Alias tags only while the requested build is not deliberately older
+      # than the current newest. A manual older build cannot move latest.
+      - if: needs.resolve.outputs.aliases == 'true'
         id: meta
         uses: docker/metadata-action@v6
         with:
@@ -156,6 +192,14 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.resolve.outputs.version }}
             type=semver,pattern={{major}},value=${{ needs.resolve.outputs.version }}
             type=raw,value=latest
+
+      - if: needs.resolve.outputs.aliases == 'false'
+        id: meta-no-alias
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ needs.resolve.outputs.image }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.resolve.outputs.version }}
 
       # Build and load first, so the smoke test can prove the tools work
       # before anything is published.
@@ -172,6 +216,8 @@ jobs:
       - name: Smoke test
         run: |
           docker run -d --name smoke \
+            --read-only --tmpfs /tmp:rw,exec,size=1g --tmpfs /root/.local:rw,mode=0755 \
+            --cap-drop ALL --security-opt no-new-privileges --init \
             -e OPENCODE_PASSWORD=smoke-password \
             local/opencode-batteries-included:test \
             serve --hostname 127.0.0.1 --port 4096
@@ -181,11 +227,32 @@ jobs:
             if [ "$(probe http://127.0.0.1:4096/global/health || echo 000)" = "200" ]; then ready=1; break; fi
             sleep 1
           done
+          : "$i"
           if [ "$ready" != "1" ]; then docker logs smoke; exit 1; fi
           test "$(probe http://127.0.0.1:4096/global/health || echo 000)" = 200
           test "$(probe http://127.0.0.1:4096/api/info || echo 000)" = 401
           test "$(probe -u opencode:smoke-password http://127.0.0.1:4096/api/info || echo 000)" = 200
           docker rm -f smoke
+
+          # Hardened image, hardened constraints: push a native addon through
+          # npm-node-gyp and a pip install inside a read-only container.
+          docker run --rm --entrypoint sh --read-only --tmpfs /tmp:rw,exec,size=1g \
+            --cap-drop ALL --security-opt no-new-privileges --init \
+            local/opencode-batteries-included:test -c '
+              set -eu
+              mkdir -p /tmp/app && cd /tmp/app
+              npm init -y >/dev/null 2>&1
+              npm install --no-save --loglevel=error bufferutil >/dev/null
+              node -e "require(\"bufferutil\"); console.log(\"bufferutil ok\")"'
+
+          docker run --rm --entrypoint sh --read-only --tmpfs /tmp:rw,exec,size=1g \
+            --cap-drop ALL --security-opt no-new-privileges --init \
+            local/opencode-batteries-included:test -c '
+              set -eu
+              python3 -m venv /tmp/piptest
+              /tmp/piptest/bin/pip install --quiet six
+              /tmp/piptest/bin/python -c "import six; print(\"pip six ok\")"'
+
           docker run --rm --entrypoint sh local/opencode-batteries-included:test -c '
             set -eu
             opencode --version
@@ -217,9 +284,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           pull: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          annotations: ${{ steps.meta.outputs.annotations }}
+          tags: ${{ steps.meta.outputs.tags || steps.meta-no-alias.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels || steps.meta-no-alias.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations || steps.meta-no-alias.outputs.annotations }}
           build-args: |
             OPENCODE_VERSION=${{ needs.resolve.outputs.version }}
           cache-from: type=gha
