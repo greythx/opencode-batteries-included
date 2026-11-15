@@ -25,6 +25,7 @@ RUN apk add --no-cache \
       github-cli \
       jq \
       nodejs \
+      nodejs-dev \
       npm \
       openssh-client \
       openssl \
@@ -34,5 +35,10 @@ RUN apk add --no-cache \
       python3-dev \
       unzip \
       uv
+
+# nodejs-dev carries the headers and gyp files for the installed Node. Pointing
+# node-gyp at them removes the header download and its tarball unpack, so a
+# native addon builds with a read-only root and without added capabilities.
+ENV npm_config_nodedir=/usr
 
 # No HEALTHCHECK: upstream has none, and the check belongs to the deployment.
