@@ -60,26 +60,20 @@ jobs:
         run: |
           set -euo pipefail
 
+          newest=$(curl -fsSL \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/anomalyco/opencode/releases?per_page=100" \
+            | jq -r '.[] | select(.prerelease == false) | .tag_name' \
+            | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+
           if [ -n "${INPUT}" ]; then
             version="${INPUT#v}"
             if ! printf '%s' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
               echo "invalid version '${INPUT}': expected X.Y.Z, with or without the leading v" >&2
               exit 1
             fi
-            newest=$(curl -fsSL \
-              -H "Authorization: Bearer ${TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/anomalyco/opencode/releases?per_page=100" \
-              | jq -r '.[] | select(.prerelease == false) | .tag_name' \
-              | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
           else
-            version=""
-            newest=$(curl -fsSL \
-              -H "Authorization: Bearer ${TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/anomalyco/opencode/releases?per_page=100" \
-              | jq -r '.[] | select(.prerelease == false) | .tag_name' \
-              | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
             version="${newest}"
           fi
 
@@ -98,7 +92,7 @@ jobs:
             fi
             echo "ghcr.io/anomalyco/opencode:${version} does not exist yet; retrying on the next run"
             echo "build=false" >> "${GITHUB_OUTPUT}"
-            echo "aliases=true" >> "${GITHUB_OUTPUT}"
+            echo "aliases=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 

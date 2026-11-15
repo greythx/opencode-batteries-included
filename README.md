@@ -21,7 +21,7 @@ Upstream is Alpine with the `opencode` binary, ripgrep and BusyBox. That covers 
 
 `nodejs-dev` is Alpine's header package for the Node that is already installed, not a second runtime. It adds `/usr/include/node` and about 1.4 MB. Alpine builds Node with `use_prefix_to_find_headers`, so node-gyp finds those headers on its own and compiles native addons without downloading anything; that works with a read-only root and every capability dropped.
 
-Everything upstream stays as-is: I kept the same base image, the same `ENTRYPOINT ["opencode"]`, the same root user and the same paths under `/root`. The added `CMD ["serve", "--hostname", "0.0.0.0", "--port", "4096"]` just starts the server with sane flags, and `WORKDIR /workspace` gives you a directory for clones. The image also bakes environment defaults that keep it self-sufficient with no compose assistance: `SHELL`, `HISTFILE`, `PATH`, `XDG_CACHE_HOME=/tmp/cache`, `NPM_CONFIG_PREFIX`/`NPM_CONFIG_USERCONFIG`/`NPM_CONFIG_CACHE`, `UV_LINK_MODE=copy`, `PIP_BREAK_SYSTEM_PACKAGES`, `GIT_CONFIG_GLOBAL` (with an empty `gitconfig` to keep `git config` happy), `GIT_SSH_COMMAND` and `OPENCODE_DISABLE_AUTOUPDATE=1`. Override any of them with `docker run -e`.
+The base image, root user and `/root` paths are unchanged. The image adds a tiny `ENTRYPOINT ["/usr/local/bin/oc-init"]` that seeds `/root/.config/gitconfig` and `/root/.config/npmrc` if they are missing (named volumes hide the image-created copies) and then execs `opencode` - everything else is upstream. The image also bakes environment defaults that keep it self-sufficient with no compose assistance: `SHELL`, `HISTFILE`, `PATH`, `XDG_CACHE_HOME=/tmp/cache`, `NPM_CONFIG_PREFIX`/`NPM_CONFIG_USERCONFIG`/`NPM_CONFIG_CACHE`, `UV_LINK_MODE=copy`, `PIP_BREAK_SYSTEM_PACKAGES`, `GIT_CONFIG_GLOBAL` (with an empty `gitconfig` to keep `git config` happy), `GIT_SSH_COMMAND` and `OPENCODE_DISABLE_AUTOUPDATE=1`. It also ships `CMD ["serve", "--hostname", "0.0.0.0", "--port", "4096"]` and `WORKDIR /workspace` so clones land somewhere predictable and a plain `docker run` serves. Override any of them.
 
 ## Authentication
 
@@ -58,6 +58,7 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 4096
+    stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4096/global/health"]
       interval: 30s
@@ -74,11 +75,22 @@ volumes:
 
 Four volumes hold everything worth keeping: sessions, auth and the packages installed with `npm -g` or `pip install` under `/root/.local`; OpenCode config, the `gh` login, git config and npmrc under `/root/.config`; clones under `/workspace`; keys and `known_hosts` under `/root/.ssh`. Delete a volume and that part starts over.
 
-The image needs no support beyond itself, the password and the port binding. A plain `docker run -d -p 127.0.0.1:4096:4096 -e OPENCODE_PASSWORD=secret ghcr.io/greythx/opencode-batteries-included:2.3.0` works without any of the compose above.
+Bind mount host repos into `/workspace` when you want host-side edits too - a clone lives on your filesystem and the agent reads and writes the same tree, e.g. `-v ~/src/my-repo:/workspace`. Expect root ownership inside the container.
+
+Back up with plain `tar`, per volume; substitute your compose project name:
+
+```bash
+docker run --rm -v myproject_data:/data -v "$PWD":/tar alpine tar -czf /tar/data.tgz -C /data .
+docker run --rm -v myproject_config:/config -v "$PWD":/tar alpine tar -czf /tar/config.tgz -C /config .
+docker run --rm -v myproject_projects:/projects -v "$PWD":/tar alpine tar -czf /tar/projects.tgz -C /projects .
+docker run --rm -v myproject_ssh:/ssh -v "$PWD":/tar alpine tar -czf /tar/ssh.tgz -C /ssh .
+```
+
+`docker compose down -v` removes every volume including `ssh` - keep an encrypted copy of `ssh` if you use it for deploy credentials.
 
 The published port binds `127.0.0.1`. Plain `0.0.0.0` would hand the web UI to anyone on the network with the password in clear on the wire, so don't do it. For remote access use a private tunnel such as Tailscale, or a reverse proxy with its own TLS or auth.
 
-For a plain start without any deployment shape, `docker run -d -p 127.0.0.1:4096:4096 -e OPENCODE_PASSWORD=secret ghcr.io/greythx/opencode-batteries-included:2.3.0` works as is.
+A quick run without any deployment shape: `docker run -d --init -p 127.0.0.1:4096:4096 -e OPENCODE_PASSWORD=secret ghcr.io/greythx/opencode-batteries-included:2.3.0`. The mountless run is ephemeral; state vanishes with the container. For hardening, use the compose example above.
 
 ## Platforms
 
@@ -88,7 +100,7 @@ For a plain start without any deployment shape, `docker run -d -p 127.0.0.1:4096
 
 ```bash
 docker build --build-arg OPENCODE_VERSION=2.3.0 -t opencode-batteries-included .
-docker run --rm --entrypoint sh opencode-batteries-included -c 'git --version && uvx --version && npx --version'
+docker run --rm --entrypoint sh opencode-batteries-included -c 'git --version && gh --version && bash --version | head -n1 && python3 --version && node --version && npm --version && npx --version && uvx --version && sqlite3 --version && tzdata_check=$(python3 -c "from zoneinfo import ZoneInfo; ZoneInfo(\"Etc/UTC\"); print(\"ok\")") && pkg-config --version && cmake --version | head -n1'
 ```
 
 The `2.3.0` in those commands is an example; check the newest release at https://github.com/anomalyco/opencode/releases before you build.
@@ -113,9 +125,15 @@ There are no lockfiles, dependency PRs or bot commits per release. OpenCode vers
 - Retention: the current release line and the previous line are kept; untagged build artifacts are pruned after verification. If reproducibility matters, pin by digest - the tags move.
 - About 1.5 GB uncompressed. The compiler, two runtimes and the GNU userland are most of it.
 - `apk` is there for a plain `docker run`. With a read-only root an agent cannot add packages, so put them in the Dockerfile, or reach for `uvx` and `npx`.
-- The image carries `/root/.config/gitconfig` and `/root/.config/npmrc` as empty files: `git config --global` dies with a fatal error on a missing file, not with a warning.
+- The image ships empty `/root/.config/gitconfig` and `/root/.config/npmrc`, and the entrypoint re-seeds them at container start if they're missing. `git config --global --list` exits cleanly with empty output.
 - `gh auth login` and `git config` are not preconfigured; the agent has to do those itself. `gh auth setup-git` is also not done for you.
 - `opencode --server` is for the CLI client; the web UI pairs with the server itself, via `opencode pair` or password. Fronting that URL with another origin without its own auth is not supported.
+- Plain `serve` is what all sane launchers use. `opencode serve --service` ignores `OPENCODE_PASSWORD` and generates its own secret in `~/.config/opencode/service.json`; only use it after seeding the service password or you'll lock yourself into a silently different auth story.
+- Inside a running container, when using `opencode api` to talk to the running server, pass `--server http://127.0.0.1:4096`; without it, a second background service is spun up on loopback.
+- Node's `Intl` is English-only; `icu-data-full` is not installed. If you need French dates or German number formatting in agent output, know about this limitation.
+- `cmake` is whatever Alpine ships (currently 4.x); projects that demand cmake 3.x cannot be built here without shipping an additional compat toolchain, which we decided not to.
+- Booting against an empty `/workspace` is fine - expect worktree warnings in the logs until you clone a repo. They are not errors.
+- Untagged GHCR manifests are pruned manually after each republish; use the GitHub UI or `gh` CLI with a `packages: delete` token. The retention note above describes what we keep and what we drop.
 - The image and the example deployment both keep their data under the four volumes. `docker compose down -v` destroys all local state.
 
 ## License
