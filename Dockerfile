@@ -75,11 +75,19 @@ ENV PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbi
 
 # Tools that read $XDG_CONFIG_HOME-style paths expect the files to exist; a
 # missing gitconfig also makes git die with a fatal error, not just warnings.
+# Named volumes hide image-created files when they're empty, so a small
+# entrypoint seeds missing ones at container start.
 RUN mkdir -p /root/.config /root/.ssh && \
-    touch /root/.config/gitconfig /root/.config/npmrc
+    touch /root/.config/gitconfig /root/.config/npmrc && \
+    printf '#!/bin/sh\nfor f in /root/.config/gitconfig /root/.config/npmrc; do\n  [ -f "$f" ] || touch "$f" || true\ndone\nchmod 700 /root/.ssh 2>/dev/null || true\nexec opencode "$@"\n' > /usr/local/bin/oc-init && \
+    chmod 0755 /usr/local/bin/oc-init
 
 # Sensible default: a plain `docker run` serves. Deployments override CMD.
 WORKDIR /workspace
 CMD ["serve", "--hostname", "0.0.0.0", "--port", "4096"]
+
+# ENTRYPOINT passes through the upstream opencode binary after seeding the
+# bind-masked files. docker exec / docker logs keep their usual meaning.
+ENTRYPOINT ["/usr/local/bin/oc-init"]
 
 # No HEALTHCHECK: the check belongs to the deployment.
