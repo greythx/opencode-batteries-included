@@ -17,7 +17,7 @@ Upstream is Alpine with the `opencode` binary, ripgrep and BusyBox. That covers 
 
 `nodejs-dev` is Alpine's header package for the Node that is already installed, not a second runtime. It adds `/usr/include/node` and about 1.4 MB. The image sets `npm_config_nodedir=/usr`, so node-gyp compiles against those headers instead of downloading a matching tarball and unpacking it. The download fails on a read-only root with every capability dropped; the system headers do not.
 
-Everything upstream stays as-is: I kept the same base, the same `ENTRYPOINT ["opencode"]`, the same root user and `/root`, and no `CMD`, `WORKDIR` or `HEALTHCHECK`. `npm_config_nodedir` is the only added setting, and it only matters when a package compiles.
+Everything upstream stays as-is: I kept the same base, the same `ENTRYPOINT ["opencode"]`, the same root user and `/root`, and no `CMD`, `WORKDIR` or `HEALTHCHECK`. Two added environment settings: `npm_config_nodedir` for the headers, and `NPM_CONFIG_CACHE=/tmp/npm`, which keeps npm's cache out of the read-only root. Override either with `docker run -e`.
 
 ## Tags
 
@@ -42,7 +42,6 @@ services:
       PIP_USER: "1"
       NPM_CONFIG_PREFIX: /root/.local
       NPM_CONFIG_USERCONFIG: /root/.config/npmrc
-      NPM_CONFIG_CACHE: /tmp/npm
       UV_LINK_MODE: copy
       GIT_CONFIG_GLOBAL: /root/.config/gitconfig
       XDG_CACHE_HOME: /tmp/cache
@@ -68,11 +67,11 @@ volumes:
 
 Four volumes hold everything worth keeping: sessions, auth and the packages installed with `npm -g` or `pip install --user` under `/root/.local`; OpenCode config, the `gh` login, git config and npmrc under `/root/.config`; clones under `/workspace`; keys and `known_hosts` under `/root/.ssh`. Delete a volume and that part starts over.
 
-Most of the environment exists because the root filesystem is read-only. Caches move to the tmpfs, `NPM_CONFIG_USERCONFIG` and `GIT_CONFIG_GLOBAL` point at the config volume, `UV_LINK_MODE=copy` stops uv from hardlinking out of its cache, and `HISTFILE` keeps shell history. `SHELL` gives terminal sessions bash rather than BusyBox `sh`. `PIP_BREAK_SYSTEM_PACKAGES` is needed on Alpine's externally managed Python, and `PIP_USER` plus `NPM_CONFIG_PREFIX` send installs to the data volume so they survive a restart.
+Most of the environment exists because the root filesystem is read-only. `XDG_CACHE_HOME` moves pip and uv caches to the tmpfs, `NPM_CONFIG_USERCONFIG` and `GIT_CONFIG_GLOBAL` point at the config volume, `UV_LINK_MODE=copy` stops uv from hardlinking out of its cache, and `HISTFILE` keeps shell history. `SHELL` gives terminal sessions bash rather than BusyBox `sh`. `PIP_BREAK_SYSTEM_PACKAGES` is needed on Alpine's externally managed Python, and `PIP_USER` plus `NPM_CONFIG_PREFIX` send installs to the data volume so they survive a restart. npm's cache default (`/tmp/npm`) is baked into the image, so it's not repeated here.
 
 `/tmp` is the only writable path outside the volumes, and its tmpfs needs `exec`: native builds and `uv` write binaries there and run them.
 
-For a plain start, remove `read_only`, the tmpfs and the two cache variables.
+For a plain start, remove `read_only` and the tmpfs.
 
 ## Platforms
 
