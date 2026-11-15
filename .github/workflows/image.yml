@@ -175,15 +175,16 @@ jobs:
             -e OPENCODE_PASSWORD=smoke-password \
             local/opencode-batteries-included:test \
             serve --hostname 127.0.0.1 --port 4096
+          probe() { docker exec smoke sh -c 'curl -s -o /dev/null -w "%{http_code}" "$@"' _ "$@"; }
+          ready=0
           for i in $(seq 1 30); do
-            code=$(docker exec smoke sh -c \
-              'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4096/global/health')
-            [ "$code" = "200" ] && break
+            if [ "$(probe http://127.0.0.1:4096/global/health || echo 000)" = "200" ]; then ready=1; break; fi
             sleep 1
           done
-          test "$(docker exec smoke sh -c 'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4096/global/health')" = 200
-          test "$(docker exec smoke sh -c 'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4096/api/info')" = 401
-          test "$(docker exec smoke sh -c 'curl -s -o /dev/null -w "%{http_code}" -u opencode:smoke-password http://127.0.0.1:4096/api/info')" = 200
+          if [ "$ready" != "1" ]; then docker logs smoke; exit 1; fi
+          test "$(probe http://127.0.0.1:4096/global/health || echo 000)" = 200
+          test "$(probe http://127.0.0.1:4096/api/info || echo 000)" = 401
+          test "$(probe -u opencode:smoke-password http://127.0.0.1:4096/api/info || echo 000)" = 200
           docker rm -f smoke
           docker run --rm --entrypoint sh local/opencode-batteries-included:test -c '
             set -eu
