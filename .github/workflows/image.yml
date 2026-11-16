@@ -3,14 +3,14 @@ name: image
 on:
   push:
     branches: [main]
+    # .dockerignore is deliberately not a trigger: the image has no COPY
+    # steps, so no context file can change what gets built or published.
     paths:
       - Dockerfile
-      - .dockerignore
       - .github/workflows/image.yml
   pull_request:
     paths:
       - Dockerfile
-      - .dockerignore
       - .github/workflows/image.yml
   schedule:
     # Every six hours. A new OpenCode release is picked up on the next run.
@@ -267,6 +267,8 @@ jobs:
             gcc --version | head -n1
             pkg-config --version
             openssl version
+            fd --version
+            mise --version
           '
 
       # The amd64 layers come from the builder's cache, so only arm64 compiles
