@@ -1,9 +1,11 @@
 # syntax=docker/dockerfile:1
 
-# Upstream OpenCode, republished with git, Python, Node and a build toolchain
-# added. Everything else stays upstream: same base image, same root user, same
-# ENTRYPOINT and the same paths under /root. The CMD only starts the server.
-# CI passes the version; this default only keeps a plain docker build working.
+# Upstream OpenCode, republished with git, Python, Node, a build toolchain,
+# `fd` and `mise` added. Everything else stays upstream: same base image, same
+# root user and the same paths under /root. `oc-init` is the entrypoint - it
+# seeds missing config, then execs `opencode` - and the CMD only starts the
+# server. CI passes the version; this default only keeps a plain docker build
+# working.
 ARG OPENCODE_VERSION=2.3.0
 FROM ghcr.io/anomalyco/opencode:${OPENCODE_VERSION}
 
@@ -21,6 +23,7 @@ RUN apk add --no-cache \
       coreutils \
       curl \
       diffutils \
+      fd \
       file \
       findutils \
       gawk \
@@ -33,6 +36,7 @@ RUN apk add --no-cache \
       libffi-dev \
       libtool \
       linux-headers \
+      mise \
       nodejs \
       nodejs-dev \
       npm \

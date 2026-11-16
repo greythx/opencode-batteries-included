@@ -1,6 +1,6 @@
 # opencode-batteries-included
 
-The official [OpenCode](https://opencode.ai) image with git, Python, Node and a build toolchain added.
+The official [OpenCode](https://opencode.ai) image with git, Python, Node, a build toolchain and `mise` added.
 
 Upstream is Alpine with the `opencode` binary, ripgrep and BusyBox. That covers the web UI, but an agent that wants to clone a repo, run tests or build a native addon gets nowhere.
 
@@ -10,7 +10,9 @@ Upstream is Alpine with the `opencode` binary, ripgrep and BusyBox. That covers 
 | `git-lfs` | repositories that track large files |
 | `github-cli` | issues, pull requests, auth |
 | `bash`, `coreutils`, GNU `grep`/`sed`/`awk`/`findutils`/`tar`/`gzip`/`xz`/`zip` | a shell and GNU tools that scripts expect |
+| `fd`, `diffutils`, `unzip`, `zstd` | `fd` for file search, `diff -u`, `.zip` and `.zst` extraction |
 | `python3`, `pip`, `python3-dev`, `uv` | Python work; `uvx` runs tools without installing them |
+| `mise` | tools outside the npm and PyPI ecosystems (Rust, Go, GitHub-release CLIs), fetched on demand; `mise x -- <tool>` caches what gets used |
 | `nodejs`, `npm` | JavaScript and TypeScript; `npx` does the same |
 | `nodejs-dev` | headers for node-gyp, so native addons build offline |
 | `build-base`, `cmake`, `pkgconf` | native addons and source packages |
@@ -31,7 +33,7 @@ The web UI asks for a password on its connect screen. The username is always `op
 
 ## Tags
 
-Each OpenCode release gets a rebuild, so `2.3.0` means OpenCode 2.3.0 with the image's current tooling. `2.2` and `2` track the newest build of their line, and `latest` follows everything. Deploy a full version; the aliases move.
+Each OpenCode release gets a rebuild, so `2.3.0` means OpenCode 2.3.0 with the image's current tooling. `2.3` and `2` track the newest build of their line, `latest` follows everything, and `2.2.7` is a frozen tag for anyone who pinned it. Deploy a full version; the aliases move.
 
 ## Run
 
@@ -100,7 +102,7 @@ A quick run without any deployment shape: `docker run -d --init -p 127.0.0.1:409
 
 ```bash
 docker build --build-arg OPENCODE_VERSION=2.3.0 -t opencode-batteries-included .
-docker run --rm --entrypoint sh opencode-batteries-included -c 'git --version && gh --version && bash --version | head -n1 && python3 --version && node --version && npm --version && npx --version && uvx --version && sqlite3 --version && tzdata_check=$(python3 -c "from zoneinfo import ZoneInfo; ZoneInfo(\"Etc/UTC\"); print(\"ok\")") && pkg-config --version && cmake --version | head -n1'
+docker run --rm --entrypoint sh opencode-batteries-included -c 'git --version && gh --version && bash --version | head -n1 && python3 --version && node --version && npm --version && npx --version && uvx --version && sqlite3 --version && fd --version && mise --version && tzdata_check=$(python3 -c "from zoneinfo import ZoneInfo; ZoneInfo(\"Etc/UTC\"); print(\"ok\")") && pkg-config --version && cmake --version | head -n1'
 ```
 
 The `2.3.0` in those commands is an example; check the newest release at https://github.com/anomalyco/opencode/releases before you build.
@@ -109,7 +111,7 @@ The `OPENCODE_VERSION` default in the Dockerfile tracks the current stable versi
 
 ## Updates
 
-The workflow polls every six hours. It reads the newest stable release from `anomalyco/opencode`, waits for a later run if upstream hasn't published the matching image yet, and skips versions already built here. Otherwise it builds amd64 and arm64 (arm64 compiles under QEMU), runs a smoke test inside the image, including HTTP-level checks on the running server, and pushes only if the test passes.
+The workflow polls every six hours. It reads the newest stable release from `anomalyco/opencode`, waits for a later run if upstream hasn't published the matching image yet, and skips a scheduled build when that version is already published. A change to the Dockerfile or the workflow always rebuilds and republishes the current version. Builds are amd64 and arm64 (arm64 compiles under QEMU), the image is smoke tested before anything is pushed, and nothing publishes unless the smoke passes.
 
 A new major version needs no extra wiring; the next poll picks it up. Polling is the only option, because GitHub can't notify this repository when another one cuts a release. Publishing is automatic; restarting your container is not.
 
@@ -125,6 +127,8 @@ There are no lockfiles, dependency PRs or bot commits per release. OpenCode vers
 - Retention: the current release line and the previous line are kept; untagged build artifacts are pruned after verification. If reproducibility matters, pin by digest - the tags move.
 - About 1.5 GB uncompressed. The compiler, two runtimes and the GNU userland are most of it.
 - `apk` is there for a plain `docker run`. With a read-only root an agent cannot add packages, so put them in the Dockerfile, or reach for `uvx` and `npx`.
+- `py3-pip` stays in the image on purpose. Agents default to `pip install`, and a fresh container that answers `pip: command not found` costs a few wasted turns before any actual work starts. Use `uv` yourself if you manage Python yourself - it's the faster CLI anyway.
+- `mise` ships with no runtimes preinstalled. `mise x -- <tool>` fetches and runs anything in its registry, with downloads landing under `/root/.local/share/mise` on the data volume; the image itself adds about 25 MB.
 - The image ships empty `/root/.config/gitconfig` and `/root/.config/npmrc`, and the entrypoint re-seeds them at container start if they're missing. `git config --global --list` exits cleanly with empty output.
 - `gh auth login` and `git config` are not preconfigured; the agent has to do those itself. `gh auth setup-git` is also not done for you.
 - `opencode --server` is for the CLI client; the web UI pairs with the server itself, via `opencode pair` or password. Fronting that URL with another origin without its own auth is not supported.
